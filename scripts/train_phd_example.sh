@@ -32,7 +32,7 @@ COMMON=(
     --latent_dim "$LATENT_DIM"
     --dataset_path "$DATA_3D" --dataset_2d_path "$DATA_2D" --features_path "$FEATURES"
     --subjects_train 'S1,S6,S7,S8,S9' --subjects_val 'S11' --subjects_test 'S5'
-    --config_path config/MB_train_h36m_long.yaml
+    --config_path config/config.yaml
     --checkpoint_dir "$CKPT_DIR"
     --downsample 2 --stride 2 --epochs 50
 )

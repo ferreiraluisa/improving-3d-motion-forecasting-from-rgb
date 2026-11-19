@@ -26,11 +26,12 @@ On top of MotionST, we study whether **auxiliary tasks** (masking joints or fram
 | 3 | Prepare the datasets | [Datasets](#3-datasets) |
 | 4 | Extract the features once | [Feature extraction](#4-feature-extraction) |
 | 5 | Train and test the models | [Models](#5-models) |
+| 6 | Check the hyperparameters we used | [Training configuration](#6-training-configuration) |
 
 ### Repository structure
 
 ```text
-config/     YAML configs (Human3.6M, short and long horizon)
+config/     shared YAML config (15 past → 25 future frames)
 dataset/    data loading, feature extraction, WHAM adapters
 models/     PHD, MotionST, MotionSTAR, adapters and backbones
 scripts/    bash scripts to run each step
@@ -233,6 +234,66 @@ If it stops, run it again: finished runs are skipped, and unfinished ones resume
 An autoregressive version of MotionST (`models/star.py`): the same spatio-temporal encoder, followed by a decoder that predicts the future frames one by one.
 
 *Training script coming soon.*
+
+## 6. Training configuration
+
+These are the settings used for the results in the thesis (Human3.6M).
+They come from the scripts in `scripts/`, the argument defaults in `src/` and the shared config `config/config.yaml`.
+
+### Data
+
+| Setting | Value |
+| ------- | ----- |
+| Observed / predicted frames | 15 → 25 (window of 40 frames) |
+| Frame rate | 25 fps (`--downsample 2` from 50 fps) |
+| Window stride | 2 (`--stride 2`) |
+| Skeleton | 17 H3.6M joints (24 SMPL joints for 3DPW) |
+| Train / val / test subjects | S1, S6, S7, S8, S9 / S11 / S5 |
+
+### Optimization
+
+| Setting | PHD phase 1 | PHD phase 2 | MotionST |
+| ------- | :---------: | :---------: | :------: |
+| Effective batch size | 64 | 256 | **256** |
+| GPUs × batch per GPU | 1 × 64 | 1 × 256 | 2 × 128 (or 1 × 256) |
+| Learning rate | 1e-4 | 2e-4 | **3e-4** |
+| Optimizer | AdamW | AdamW | AdamW |
+| Weight decay | 1e-4 | 1e-4 | 1e-4 |
+| LR schedule | 6 warmup epochs + cosine | cosine | 5 warmup epochs + cosine |
+| Minimum LR | 1% of the LR | 1% of the LR | 1% of the LR |
+| Epochs | 50 | 50 | 50 |
+| Gradient clipping (norm) | 1.0 | 1.0 | 1.0 |
+| Seed | 1126 | 1126 | 1126 (ablation: 1126, 42, 2024, 7, 123) |
+| Best checkpoint | lowest val loss | lowest val future MPJPE | lowest val future MPJPE |
+
+The warmup increases the LR linearly from 10% to 100% of its value.
+In PHD phase 2, a curriculum increases the number of predicted frames from 1 to 25 over the first 15 epochs (`--curriculum_epochs 15`, `--max_pred_steps 25`).
+
+### MotionST architecture
+
+| Setting | Value |
+| ------- | ----- |
+| Model dimension (`--d_model`) | 128 |
+| Attention heads (`--n_heads`) | 4 |
+| Spatio-temporal blocks (`--num_layers`) | 4 |
+| Feed-forward dimension (`--dim_ff`) | 256 |
+| Dropout | 0.1 |
+| Input features (`--feat_dim`) | 563 (WHAM) |
+
+### Losses
+
+All position losses are MPJPE on the 3D joints.
+
+| Model | Loss |
+| ----- | ---- |
+| PHD phase 1 | MPJPE + 1.0 · bone length + 1.0 · velocity + MPJPE at offsets of 5 and 10 frames |
+| PHD phase 2 | 1.0 · past MPJPE + 1.0 · future MPJPE + 1.0 · latent MSE (future features from `f_AR` vs. from `f_movie`) + 0.1 · velocity |
+| MotionST, past | MPJPE + 1.0 · bone length + 0.5 · velocity + 0.5 · acceleration |
+| MotionST, future | MPJPE + 1.0 · bone length + 3.0 · velocity + 1.0 · acceleration |
+| Auxiliary tasks | the same past + future loss on the corrupted copy of the input, weighted by `--lambda_aux_joint` / `--lambda_aux_frame` (1.0) |
+
+The MotionST total loss is past + 1.0 · future (`--lambda_future`).
+In the auxiliary-task ablation, the masking ratios are 0.1 for `joint` and 0.5 for `frame`.
 
 ---
 
