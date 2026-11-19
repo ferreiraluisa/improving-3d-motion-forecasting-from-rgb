@@ -152,7 +152,7 @@ AUX_TASKS = ('joint', 'frame')
 
 
 def active_aux_tasks(args):
-    """Ordered list of enabled aux tasks, e.g. --aux_tasks joint,noise.
+    """Ordered list of enabled aux tasks, e.g. --aux_tasks joint,frame.
     'both' is kept as an alias of 'joint,frame'."""
     if not args.aux:
         return []
@@ -180,9 +180,6 @@ def build_aux_batch(feat_past, args, device):
     frame : all joints of random past frames -> [MASK]
             --aux_frame_mode iid  : independent frames;  span : one contiguous block
             --aux_frame_mask_context : also hide the image context of those frames
-    noise : Gaussian noise on the WHAM joint coords (root untouched), no mask.
-            This matches the test-time situation (WHAM joints are noisy, not
-            missing), unlike masking.
     Returns phi (n*B, T, F), joint_mask (n*B, T, K), per-copy masks list,
     context_mask (n*B, T) or None."""
     B, T, K = feat_past.size(0), args.past_length, args.num_joints
@@ -195,7 +192,7 @@ def build_aux_batch(feat_past, args, device):
             r = _sample_ratio(args.aux_joint_ratio, B, device, args.aux_random_ratio)
             m = random_joint_mask(B, T, K, r.view(B, 1, 1), device)
             phis.append(feat_past)
-        elif task == 'frame':
+        else:  # frame
             r = _sample_ratio(args.aux_frame_ratio, B, device, args.aux_random_ratio)
             if args.aux_frame_mode == 'span':
                 f = random_span_frame_mask(B, T, r, device)
@@ -205,14 +202,6 @@ def build_aux_batch(feat_past, args, device):
             if args.aux_frame_mask_context:
                 c = f
             phis.append(feat_past)
-        else:  # noise
-            phi = feat_past.clone()
-            coords = phi[..., -K * 3:].reshape(B, T, K, 3)
-            noise = torch.randn_like(coords) * args.aux_noise_std
-            noise[..., 0, :] = 0.0                     # keep root (model is root-relative)
-            phi[..., -K * 3:] = (coords + noise).reshape(B, T, K * 3)
-            m = torch.zeros(B, T, K, dtype=torch.bool, device=device)
-            phis.append(phi)
         masks.append(m)
         ctx.append(c)
 
@@ -233,9 +222,8 @@ def aux_weight_at(base, epoch, args):
 def train_epoch(model, args, dataloader, optimizer, epoch, device):
     model.train()
 
-    tasks = active_aux_tasks(args)                  # e.g. [], ['frame'], ['joint', 'noise']
-    aux_weight = {'joint': args.lambda_aux_joint, 'frame': args.lambda_aux_frame,
-                  'noise': args.lambda_aux_noise}
+    tasks = active_aux_tasks(args)                  # e.g. [], ['frame'], ['joint', 'frame']
+    aux_weight = {'joint': args.lambda_aux_joint, 'frame': args.lambda_aux_frame}
     aux_weight = {t: aux_weight_at(w, epoch, args) for t, w in aux_weight.items()}
 
     sums = dict(loss=0.0, past_mpjpe=0.0, future_mpjpe=0.0, bone=0.0, vel=0.0)
@@ -265,7 +253,7 @@ def train_epoch(model, args, dataloader, optimizer, epoch, device):
         # ── aux tasks (corrupted input, ground-truth targets) ──
         aux_parts = {}
         for i, t in enumerate(tasks, start=1):
-            pm = copy_masks[i] if (args.aux_masked_only and t != 'noise') else None
+            pm = copy_masks[i] if args.aux_masked_only else None
             l_aux, aux_parts[t] = compute_losses(past_chunks[i], future_chunks[i],
                                                  gt_past, gt_future, args,
                                                  past_mask=pm,
@@ -554,12 +542,8 @@ def build_parser():
                    help='Train with AuxFormer-style auxiliary tasks (joint masking + '
                         'frame masking). Requires --wham. Training only.')
     p.add_argument('--aux_tasks', type=str, default='both',
-                   help="Comma list of aux tasks from {joint, frame, noise}, e.g. "
-                        "'frame,noise'. 'both' = 'joint,frame'.")
-    p.add_argument('--lambda_aux_noise', type=float, default=1.0,
-                   help='Weight of the denoising aux loss.')
-    p.add_argument('--aux_noise_std', type=float, default=0.02,
-                   help='Std (same units as the joints, m) of the noise in the denoising task.')
+                   help="Comma list of aux tasks from {joint, frame}, e.g. "
+                        "'frame'. 'both' = 'joint,frame'.")
     p.add_argument('--aux_future_weight', type=float, default=1.0,
                    help='Scale of the FUTURE loss inside aux copies (0 = aux copies only '
                         'train past reconstruction).')
