@@ -41,9 +41,6 @@ visualize/  3D and qualitative plots
 figs/       figures used in this README
 ```
 
-> **Note:** run every command from the root of the repository, with `export PYTHONPATH=.`.
-> The scripts in `scripts/` contain paths from our cluster; edit the paths at the top of each script before running it.
-
 ---
 
 ## 1. Installation
@@ -60,7 +57,6 @@ conda activate thesis
 
 The script also sets `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1` in the environment, so that PyTorch can load the older checkpoints.
 
-> **Note:** run it on a machine that does not have `~/WHAM` yet, otherwise `git clone` fails and the script stops.
 
 ## 2. Pre-trained weights
 
@@ -93,9 +89,6 @@ Download the weights from the WHAM website or from Google Drive:
 wget -O models/wham/wham_data.zip 'https://drive.google.com/uc?id=1i7kt9RlCCCNEW2aYaDWVr-G778JkLNcB&export=download&confirm=t'
 unzip models/wham/wham_data.zip -d models/wham
 ```
-
-> **Note:** Google Drive sometimes returns an HTML page instead of the file.
-> If `unzip` fails, download the file manually in the browser.
 
 When you are done, you should have:
 
@@ -173,7 +166,6 @@ It is trained in two phases:
 2. Freeze `f_3D` and learn to forecast future poses: `f_movie` + `f_AR` (`src/train_phd_ddp2.py`), with a curriculum that increases the number of predicted steps up to 25.
 
 `scripts/train_phd_example.sh` runs phase 1, phase 2 and the test, one after the other.
-At the top of the script, choose the features: WHAM (`LATENT_DIM=563`) or HMR ResNet (`LATENT_DIM=2048`).
 
 ```bash
 bash scripts/train_phd_example.sh

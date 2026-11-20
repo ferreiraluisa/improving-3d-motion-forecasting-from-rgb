@@ -21,7 +21,7 @@ from models.motionst import (MotionTransformerST, random_joint_mask, random_fram
 
 # dataset
 from dataset.losd_data_h36 import Fusion as FusionH36M
-from dataset.losd_data_3dpw import Fusion3DPW
+from dataset.losd_data_3dpw import Fusion as Fusion3DPW
 from dataset.dataloader import Human36mDataset, ThreeDPWDataset
 
 # viz

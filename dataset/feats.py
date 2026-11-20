@@ -13,6 +13,17 @@ Extractors (--extractor):
     resnet_v2       TF resnet_v2_50 / HMR      224x224  -> 2048-d
     hmr2_vit_mean   HMR2.0 ViT-H patch mean    256x256  -> 1280-d
     hmr2_crossattn  HMR2.0 decoder token       256x256  -> 1024-d
+    wham            WHAM phi_hat               (own crops) -> 563-d
+
+--extractor wham (see extractors.WHAMExtractor):
+    Steps 2-4 are replaced by WHAM's own pipeline, as in the original WHAM
+    demo: its 2D detector (ViTPose) runs on the full frames, WHAM builds its
+    boxes from those keypoints, crops with its own crop, and runs the motion
+    encoder + integrator over the WHOLE video of one camera (one sequence, one
+    SMPL init). The 2D ground truth is only used for the number of frames: the
+    output is trimmed / padded to len(keypoints), like the other extractors.
+    Output per camera: (N, 563) = [context (512) | COCO-17 kp3d (51)]; convert
+    the joints to the H3.6M skeleton with scripts/wham_adapter.sh.
 """
 
 import os
@@ -24,7 +35,7 @@ import argparse
 import cv2
 import numpy as np
 
-from extractors import (EXTRACTORS, build_extractor,
+from dataset.extractors import (EXTRACTORS, build_extractor,
                         compute_crop_size_from_centered, crop_one_frame)
 
 
@@ -57,6 +68,21 @@ def resolve_video_path(videos_root, subject, action, cam_id, use_alias=True):
         if os.path.isfile(p):
             return p
     return None
+
+
+def iter_video_bgr(path):
+    """Fresh iterator over the BGR frames of a video (WHAM reads it twice)."""
+    cap = cv2.VideoCapture(path)
+    if not cap.isOpened():
+        raise IOError(f"Cannot open video: {path}")
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            yield frame
+    finally:
+        cap.release()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -159,9 +185,11 @@ def parse_args():
                     help="Path to data_2d_h36m_gt.npz (pixel-space 2D joints).")
     ap.add_argument("--vid_path", required=True,
                     help="Root with {subject}/Videos/{action}.{camid}.mp4")
-    ap.add_argument("--ckpt", required=True,
+    ap.add_argument("--ckpt", default=None,
                     help="resnet_v2_50/HMR ckpt, or the HMR2.0 .ckpt "
-                         "(epoch=35-step=1000000.ckpt) for the hmr2_* extractors")
+                         "(epoch=35-step=1000000.ckpt) for the hmr2_* extractors. "
+                         "Required except for --extractor wham, where it is the "
+                         "HMR2 ckpt inside WHAM (default: models.wham.HMR2A_CKPT).")
     ap.add_argument("--extractor", default="resnet_v2", choices=sorted(EXTRACTORS))
     ap.add_argument("--out", default=None,
                     help="THE output file: one .npy holding "
@@ -204,7 +232,30 @@ def parse_args():
                          "a complete dataset.")
     ap.add_argument("--debug-crops", default=None,
                     help="Dump sample crops there and exit (no model loaded).")
+
+    w = ap.add_argument_group("WHAM (--extractor wham)")
+    w.add_argument("--wham-ckpt", default=None,
+                   help="default: models.wham.WHAM_CKPT")
+    w.add_argument("--wham-detector", choices=["vitpose", "yolo"],
+                   default="vitpose")
+    w.add_argument("--wham-root", default=None,
+                   help="WHAM checkout, needed for --wham-detector vitpose")
+    w.add_argument("--yolo-pose-ckpt", default="yolov8x-pose.pt")
+    w.add_argument("--wham-init", choices=["smpl", "zeros"], default="smpl")
+    w.add_argument("--smpl-dir", default=None,
+                   help="SMPL model folder for the init (default: the WHAM one)")
+    w.add_argument("--wham-fps", type=float, default=50.0,
+                   help="fps of the H36M videos (used to smooth WHAM's boxes)")
+    w.add_argument("--det-batch", type=int, default=16)
     args = ap.parse_args()
+
+    if args.ckpt is None and args.extractor != "wham":
+        ap.error("--ckpt is required for --extractor " + args.extractor)
+    if args.extractor == "wham":
+        if args.wham_detector == "vitpose" and not args.wham_root:
+            ap.error("--wham-detector vitpose needs --wham-root")
+        if args.debug_crops:
+            ap.error("--debug-crops shows the GT-joint crops; WHAM makes its own")
 
     if args.out_dir is None and args.out is None:
         ap.error("one of --out or --out_dir is required")
@@ -292,7 +343,16 @@ def main():
                 break
 
             try:
-                fc, m = extractor.extract_clip(vpath, j2d, args.scale, batch_size)
+                if getattr(extractor, "sequence_level", False):
+                    # WHAM: whole video as one sequence, fitted to N frames
+                    out = extractor.extract_frames(
+                        lambda: iter_video_bgr(vpath), fps=args.wham_fps,
+                        target_len=N, tag=f"{subject}/{action} cam{cam_idx}")
+                    fc = out["phi"]
+                    m = len(fc)
+                else:
+                    fc, m = extractor.extract_clip(vpath, j2d, args.scale,
+                                                   batch_size)
             except Exception as e:
                 print(f"[ERROR] {subject}/{action} cam{cam_idx}: {e}")
                 ok = False

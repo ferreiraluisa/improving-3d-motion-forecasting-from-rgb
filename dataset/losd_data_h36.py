@@ -6,7 +6,6 @@ import torch.utils.data as data
 
 from dataset.camera import *
 from dataset.generator import ChunkedGenerator
-from dataset.utils import deterministic_random
 
 
 class Fusion(data.Dataset):
