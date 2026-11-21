@@ -36,27 +36,44 @@ dataset/    data loading, feature extraction, WHAM adapters
 models/     PHD, MotionST, MotionSTAR, adapters and backbones
 scripts/    bash scripts to run each step
 src/        training / testing entry points
-utils/      metrics (MPJPE), DDP helpers, conversion tools
+utils/      losses and metrics (MPJPE, DTW), config loader, DDP helpers
 visualize/  3D and qualitative plots
 figs/       figures used in this README
 ```
+
+> **Note:** run every command from the root of the repository, with `export PYTHONPATH=.`.
+> The scripts in `scripts/` contain paths from our cluster; edit the paths at the top of each script before running it.
 
 ---
 
 ## 1. Installation
 
-**Requirements:** Linux, an NVIDIA GPU, and conda.
+**Requirements:** Linux, an NVIDIA GPU with a driver that supports CUDA 12.6, and conda.
 
-`scripts/setup_thesis_env.sh` restores the `thesis` conda environment from a packed archive (`thesis_env.tar.gz`, made with `conda-pack`) and clones [WHAM](https://github.com/yohanshin/WHAM) (with ViTPose) into `~/WHAM`.
-Place `thesis_env.tar.gz` in the folder you run the script from:
+`scripts/setup_thesis_env.sh` builds the `thesis` conda environment from scratch:
+Python 3.10, PyTorch 2.7.0 + CUDA 12.6, numpy 2, mmcv 1.5.0 and ViTPose (from WHAM).
+It needs a clone of [WHAM](https://github.com/yohanshin/WHAM) with its submodules first:
 
 ```bash
+git clone --recursive https://github.com/yohanshin/WHAM ~/WHAM
 bash scripts/setup_thesis_env.sh
 conda activate thesis
 ```
 
-The script also sets `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1` in the environment, so that PyTorch can load the older checkpoints.
+The script ends with an import test of the main packages.
+It also sets `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1` in the environment, so that PyTorch can load the older checkpoints.
 
+Optional variables (for example `ENV_NAME=thesis2 bash scripts/setup_thesis_env.sh`):
+
+| Variable | Default | Meaning |
+| -------- | ------- | ------- |
+| `ENV_NAME` | `thesis` | name of the environment |
+| `WHAM_DIR` | `~/WHAM` | WHAM folder |
+| `PIP_FREEZE` | `scripts/thesis_pip.txt` | exact package versions (`pip freeze` of the original env); without it, a minimal list is installed |
+| `CUDA_TAG` | `cu126` | PyTorch wheels (`cu126`, `cu118`, ...) |
+| `BUILD_MMCV_OPS` | `0` | `1` compiles the mmcv CUDA ops (needs `nvcc`, ~20-30 min); WHAM does not need them |
+
+> **Note:** the HMR (ResNet-50) extractor also needs TensorFlow, which the script does not install.
 
 ## 2. Pre-trained weights
 
@@ -89,6 +106,9 @@ Download the weights from the WHAM website or from Google Drive:
 wget -O models/wham/wham_data.zip 'https://drive.google.com/uc?id=1i7kt9RlCCCNEW2aYaDWVr-G778JkLNcB&export=download&confirm=t'
 unzip models/wham/wham_data.zip -d models/wham
 ```
+
+> **Note:** Google Drive sometimes returns an HTML page instead of the file.
+> If `unzip` fails, download the file manually in the browser.
 
 When you are done, you should have:
 
@@ -135,10 +155,16 @@ We compare four feature extractors (details in the thesis):
 
 | `EXTRACTOR` | Model | Feature size |
 | ----------- | ----- | :----------: |
-| `resnet_v2` | HMR (ResNet-50) | 2048 |
+| `resnet_v2` | HMR (ResNet-50), needs TensorFlow | 2048 |
 | `hmr2_vit_mean` | HMR 2.0 ViT-H, mean-pooled | 1280 |
 | `hmr2_crossattn` | HMR 2.0 cross-attention token | 1024 |
 | `wham` | WHAM (512 context + 17 × 3 joints) | 563 |
+
+The first three crop each frame around the ground-truth 2D joints.
+**WHAM** makes its own crops, as in the original WHAM demo: ViTPose detects the person on the full frames, and WHAM runs over the whole video of each camera as one sequence.
+For WHAM, leave `CHECKPOINT` empty (WHAM uses its own HMR 2.0 weights) and set `WHAM_ROOT` to your WHAM folder.
+
+> **Note:** the WHAM checkpoints and SMPL body models are set at the top of `models/wham.py`, `models/smpl.py` and `models/backbone/smpl_head.py`. Change these paths to your own before running.
 
 **Extra step for WHAM only.** WHAM outputs joints in the COCO-17 format, which does not match our ground truth.
 A small adapter converts them to the H3.6M skeleton (17 joints) or the SMPL skeleton (24 joints, for 3DPW).
@@ -166,6 +192,7 @@ It is trained in two phases:
 2. Freeze `f_3D` and learn to forecast future poses: `f_movie` + `f_AR` (`src/train_phd_ddp2.py`), with a curriculum that increases the number of predicted steps up to 25.
 
 `scripts/train_phd_example.sh` runs phase 1, phase 2 and the test, one after the other.
+At the top of the script, choose the features: WHAM (`LATENT_DIM=563`) or HMR ResNet (`LATENT_DIM=2048`).
 
 ```bash
 bash scripts/train_phd_example.sh
